@@ -145,6 +145,112 @@ async def download_pdf(req: PdfRequest):
 
 
 # ---------------------------------------------------------------------------
+# M5 – /api/process-voice  (Transcript → Kannada letter via M6 agent)
+# ---------------------------------------------------------------------------
+class ProcessVoiceRequest(BaseModel):
+    transcript: str
+    language:   str = "en"
+
+
+@app.post("/api/process-voice", tags=["agent"])
+async def process_voice(req: ProcessVoiceRequest):
+    """
+    Accept a plain-text transcript (from M3/M4), run it through the
+    SahayaVoice civic complaint agent (M6), and return a VoiceResult JSON.
+    Owner: Member 5 (Backend & API Developer) + Member 6 (AI Agent).
+    """
+    try:
+        from pipeline.sahaya.agent import process_full_text  # type: ignore[import]
+        result = await process_full_text(req.transcript)
+        if result.status == "failed":
+            raise HTTPException(status_code=500, detail=result.error or "Agent failed")
+        letter = result.complaint_letter
+        return {
+            "transcript":        req.transcript,
+            "language":          req.language,
+            "kannada_letter":    letter.kannada_letter if letter else "",
+            "summary":           letter.english_summary if letter else "",
+            "next_steps":        "Print and submit to your ward office or upload to the BBMP portal.",
+            "action":            "generate",
+            "clarify_question":  result.clarification_question,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Agent error: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# M5/M8 – /api/demo-preset  (One-click demo scenarios for judging)
+# ---------------------------------------------------------------------------
+class DemoPresetRequest(BaseModel):
+    preset_id: str
+    language:  str = "en"
+
+
+# M8 owns the content of these presets – improve Kannada letters before demo day
+_DEMO_PRESETS: dict[str, dict] = {
+    "bescom_whitefield": {
+        "transcript": "There is severe power fluctuation in my area for the past 3 days in Whitefield.",
+        "kannada_letter": (
+            "ಮಾನ್ಯ ಅಧಿಕಾರಿಗಳಿಗೆ,\n\n"
+            "ವಿಷಯ: ವೈಟ್‌ಫೀಲ್ಡ್ ಪ್ರದೇಶದಲ್ಲಿ ವಿದ್ಯುತ್ ಏರಿಳಿತದ ದೂರು\n\n"
+            "ನಾನು ವೈಟ್‌ಫೀಲ್ಡ್ ನಿವಾಸಿಯಾಗಿದ್ದು, ಕಳೆದ 3 ದಿನಗಳಿಂದ ನಮ್ಮ ಪ್ರದೇಶದಲ್ಲಿ "
+            "ನಿರಂತರ ವಿದ್ಯುತ್ ಏರಿಳಿತ ಉಂಟಾಗುತ್ತಿದೆ. ಇದರಿಂದ ಮನೆಯ ವಿದ್ಯುತ್ ಉಪಕರಣಗಳು "
+            "ಹಾಳಾಗುವ ಭಯವಿದೆ. ದಯಮಾಡಿ ತಕ್ಷಣ ಕ್ರಮ ತೆಗೆದುಕೊಳ್ಳಬೇಕೆಂದು ವಿನಂತಿಸುತ್ತೇನೆ.\n\n"
+            "ವಂದನೆಗಳೊಂದಿಗೆ,\nನಿಮ್ಮ ವಿಧೇಯ"
+        ),
+        "summary": "BESCOM complaint: Power fluctuation in Whitefield area for 3 days. Requesting immediate action.",
+        "next_steps": "Call BESCOM helpline 1912 or visit the nearest BESCOM office in Whitefield.",
+        "action": "generate",
+    },
+    "bwssb_jayanagar": {
+        "transcript": "No water supply in Jayanagar 4th block for the past 2 days.",
+        "kannada_letter": (
+            "ಮಾನ್ಯ ಅಧಿಕಾರಿಗಳಿಗೆ,\n\n"
+            "ವಿಷಯ: ಜಯನಗರ 4ನೇ ಬ್ಲಾಕ್‌ನಲ್ಲಿ ನೀರು ಸರಬರಾಜು ಸ್ಥಗಿತ\n\n"
+            "ನಾನು ಜಯನಗರ 4ನೇ ಬ್ಲಾಕ್ ನಿವಾಸಿಯಾಗಿದ್ದು, ಕಳೆದ 2 ದಿನಗಳಿಂದ ನಮ್ಮ ಪ್ರದೇಶಕ್ಕೆ "
+            "ಯಾವುದೇ ನೀರಿನ ಸರಬರಾಜು ಆಗುತ್ತಿಲ್ಲ. ದಿನನಿತ್ಯದ ಕಾರ್ಯಗಳಿಗೆ ತೊಂದರೆ ಆಗುತ್ತಿದೆ. "
+            "ದಯಮಾಡಿ ಶೀಘ್ರ ಕ್ರಮ ತೆಗೆದುಕೊಳ್ಳಬೇಕೆಂದು ವಿನಂತಿಸುತ್ತೇನೆ.\n\n"
+            "ವಂದನೆಗಳೊಂದಿಗೆ,\nನಿಮ್ಮ ವಿಧೇಯ"
+        ),
+        "summary": "BWSSB complaint: No water supply in Jayanagar 4th block for 2 days.",
+        "next_steps": "Call BWSSB helpline 1916 or visit the nearest BWSSB office.",
+        "action": "generate",
+    },
+    "rental_koramangala": {
+        "transcript": "My landlord is not returning my security deposit in Koramangala. It has been 3 months.",
+        "kannada_letter": (
+            "ಮಾನ್ಯ ಅಧಿಕಾರಿಗಳಿಗೆ,\n\n"
+            "ವಿಷಯ: ಭದ್ರತಾ ಠೇವಣಿ ವಾಪಸ್ ನೀಡದಿರುವ ಬಗ್ಗೆ ದೂರು – ಕೋರಮಂಗಲ\n\n"
+            "ನಾನು ಕೋರಮಂಗಲದಲ್ಲಿ ಬಾಡಿಗೆ ಮನೆಯಲ್ಲಿ ವಾಸಿಸುತ್ತಿದ್ದು, 3 ತಿಂಗಳ ಹಿಂದೆ ಮನೆ "
+            "ಖಾಲಿ ಮಾಡಿದ್ದೇನೆ. ಆದರೂ ನನ್ನ ಮನೆ ಮಾಲೀಕರು ಭದ್ರತಾ ಠೇವಣಿ ಹಣವನ್ನು ವಾಪಸ್ "
+            "ನೀಡುತ್ತಿಲ್ಲ. ದಯಮಾಡಿ ಸೂಕ್ತ ಕ್ರಮ ತೆಗೆದುಕೊಳ್ಳಬೇಕೆಂದು ವಿನಂತಿಸುತ್ತೇನೆ.\n\n"
+            "ವಂದನೆಗಳೊಂದಿಗೆ,\nನಿಮ್ಮ ವಿಧೇಯ"
+        ),
+        "summary": "Rental dispute: Landlord not returning security deposit in Koramangala after 3 months.",
+        "next_steps": "File complaint at Lok Adalat, civil court, or Rent Authority of Karnataka.",
+        "action": "generate",
+    },
+}
+
+
+@app.post("/api/demo-preset", tags=["demo"])
+async def demo_preset(req: DemoPresetRequest):
+    """
+    Return a pre-filled VoiceResult for one-click demo scenarios during judging.
+    Owner: Member 8 (QA & Demo) owns the preset content.
+    """
+    preset = _DEMO_PRESETS.get(req.preset_id)
+    if not preset:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown preset_id: {req.preset_id!r}. Valid: {list(_DEMO_PRESETS.keys())}",
+        )
+    return {**preset, "language": req.language}
+
+
+# ---------------------------------------------------------------------------
 # Dev entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":

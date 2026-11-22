@@ -31,3 +31,10 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Tool internals (Bob / Refact)
+.refact/
+.snapshots/
+
+# Nested repo copy
+SahayaVoice-main/
