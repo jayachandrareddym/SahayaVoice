@@ -4,40 +4,41 @@
 
 /* --------------------------------------------------------------------------
    Design tokens (RGB triples so Tailwind can apply opacity modifiers)
-   Dark is the signature look; light is a warm "paper" variant.
+   Vibrant palette: hot pink accent, electric violet, cyan, on deep plum.
+   Dark is the signature look; light is a bright lavender variant.
    -------------------------------------------------------------------------- */
 :root {
-  --bg: 11 12 22;
-  --surface: 20 22 38;
-  --surface-2: 30 33 54;
+  --bg: 10 6 28;
+  --surface: 24 14 52;
+  --surface-2: 38 24 78;
   --line: 255 255 255;
-  --ink: 238 240 255;
-  --muted: 148 154 190;
-  --accent: 255 178 62;      /* marigold */
-  --accent-ink: 30 18 0;
-  --violet: 139 116 255;
-  --teal: 45 212 191;
-  --success: 52 211 153;
-  --danger: 251 113 133;
-  --paper: 252 249 242;
-  --paper-ink: 33 28 22;
-  --line-alpha: 0.08;
+  --ink: 247 244 255;
+  --muted: 170 160 215;
+  --accent: 255 56 140;      /* hot pink */
+  --accent-ink: 255 255 255;
+  --violet: 132 76 255;      /* electric violet */
+  --teal: 0 224 255;         /* cyan */
+  --success: 36 232 150;
+  --danger: 255 76 76;
+  --paper: 253 251 255;
+  --paper-ink: 30 20 50;
+  --line-alpha: 0.1;
   color-scheme: dark;
 }
 
 :root[data-theme="light"] {
-  --bg: 248 245 239;
+  --bg: 252 246 255;
   --surface: 255 255 255;
-  --surface-2: 243 239 231;
-  --line: 30 26 20;
-  --ink: 24 22 32;
-  --muted: 104 100 122;
-  --accent: 222 128 8;
+  --surface-2: 244 234 255;
+  --line: 40 20 70;
+  --ink: 26 14 52;
+  --muted: 108 94 145;
+  --accent: 236 22 118;
   --accent-ink: 255 255 255;
-  --violet: 104 76 240;
-  --teal: 13 148 136;
-  --success: 5 150 105;
-  --danger: 225 29 72;
+  --violet: 110 44 255;
+  --teal: 0 168 214;
+  --success: 0 168 100;
+  --danger: 230 32 56;
   --paper: 255 255 255;
   --paper-ink: 33 28 22;
   --line-alpha: 0.1;
