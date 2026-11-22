@@ -2,23 +2,28 @@
 # Install: pip install -r requirements.txt
 
 # Web framework & server
-fastapi==0.111.0
-uvicorn[standard]==0.29.0
-python-multipart==0.0.9        # audio file uploads (M3)
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9        # audio file uploads (M3)
 
 # Settings / env
-pydantic==2.7.1                # data validation (FastAPI + M6)
-pydantic-settings==2.3.3       # BaseSettings for config.py (M6)
-python-dotenv==1.0.1           # load .env file
+pydantic>=2.7.1                # data validation (FastAPI + M6)
+pydantic-settings>=2.3.3       # BaseSettings for config.py (M6)
+python-dotenv>=1.0.1           # load .env file
 
 # AI / LLM
-openai==1.30.1                 # Whisper STT + fallback LLM (GPT-4o)
-ibm-watsonx-ai==1.0.6          # IBM Granite / watsonx.ai (M6)
-httpx==0.27.0                  # async HTTP client for Sarvam / Bhashini APIs
+openai>=1.30.1                 # Whisper STT + GPT-4o fallback
+httpx>=0.27.0                  # async HTTP client for Sarvam / Bhashini APIs
+
+# pandas/numpy – binary only (avoids C compiler on Windows)
+pandas>=2.3.0 --only-binary=:all:
+numpy>=2.0.0 --only-binary=:all:
 
 # TTS (M7)
-edge-tts==6.1.9                # fallback TTS – no API key required
-# elevenlabs                   # optional – uncomment if ElevenLabs is used
+edge-tts>=6.1.9                # fallback TTS – no API key required
 
 # Document generation (M7)
-reportlab==4.2.0               # PDF generation
+reportlab>=4.2.0               # PDF generation
+
+# NOTE: ibm-watsonx-ai must be installed separately on Windows
+#   pip install ibm-watsonx-ai --no-deps
