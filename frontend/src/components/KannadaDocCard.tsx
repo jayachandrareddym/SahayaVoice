@@ -3,46 +3,76 @@
 /**
  * SahayaVoice – KannadaDocCard Component
  * Owner: Member 7 (TTS & Document Output)
- * Scaffold by: Member 1 (Task 1)
  *
- * Responsibilities (M7):
- *   - Display split-view card:
- *       Left/Top:  user's transcript + AI conversational response / clarification
- *       Right/Bottom: official Kannada complaint letter
- *   - "Copy Text" button copies the Kannada letter to clipboard
- *   - "Download PDF" button generates and downloads a PDF via reportlab (backend)
- *   - Play audio confirmation via /api/speak (TTS)
- *   - Show English/Hindi verification summary below the Kannada letter
+ * - Split-view card: transcript + Kannada letter
+ * - "Copy Text" copies the letter to clipboard
+ * - "Download PDF" calls /api/download-pdf and triggers browser download
+ * - "▶ Play" calls /api/speak and plays audio confirmation
  */
 
+import { useState } from "react";
 import { VoiceResult } from "@/app/page";
 
 interface KannadaDocCardProps {
   result: VoiceResult;
 }
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
 export default function KannadaDocCard({ result }: KannadaDocCardProps) {
+  const [copied, setCopied] = useState(false);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+  const [audioError, setAudioError] = useState<string | null>(null);
+
   const handleCopy = async () => {
     await navigator.clipboard.writeText(result.kannada_letter);
-    /* TODO (M7): show a brief toast / confirmation message */
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const handleDownloadPdf = async () => {
-    /**
-     * TODO (M7):
-     *   POST /api/download-pdf with { kannada_letter, summary }
-     *   Receive a PDF blob and trigger browser download.
-     */
-    console.warn("KannadaDocCard: PDF download not yet implemented (M7)");
+    setPdfError(null);
+    try {
+      const res = await fetch(`${API_URL}/api/download-pdf`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kannada_letter: result.kannada_letter,
+          summary: result.summary ?? "",
+        }),
+      });
+      if (!res.ok) throw new Error(`Server error ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "sahayavoice_complaint.pdf";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setPdfError(err instanceof Error ? err.message : "Download failed");
+    }
   };
 
   const handlePlayAudio = async () => {
-    /**
-     * TODO (M7):
-     *   POST /api/speak with { text: result.summary, language: result.language }
-     *   Play the returned audio stream.
-     */
-    console.warn("KannadaDocCard: audio playback not yet implemented (M7)");
+    setAudioError(null);
+    try {
+      const text = result.summary || result.kannada_letter;
+      const language = result.language || "en";
+      const res = await fetch(`${API_URL}/api/speak`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, language }),
+      });
+      if (!res.ok) throw new Error(`TTS error ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.onended = () => URL.revokeObjectURL(url);
+      await audio.play();
+    } catch (err) {
+      setAudioError(err instanceof Error ? err.message : "Playback failed");
+    }
   };
 
   return (
@@ -92,7 +122,7 @@ export default function KannadaDocCard({ result }: KannadaDocCardProps) {
                 onClick={handleCopy}
                 className="text-xs px-3 py-1 rounded-full border border-gray-200 text-gray-600 hover:bg-gray-50"
               >
-                Copy Text
+                {copied ? "✓ Copied!" : "Copy Text"}
               </button>
               <button
                 onClick={handleDownloadPdf}
@@ -111,6 +141,13 @@ export default function KannadaDocCard({ result }: KannadaDocCardProps) {
             <div className="mt-4 p-3 bg-green-50 rounded-lg text-sm text-green-800">
               <strong>Next Steps:</strong> {result.next_steps}
             </div>
+          )}
+
+          {pdfError && (
+            <p className="mt-2 text-xs text-red-500">PDF error: {pdfError}</p>
+          )}
+          {audioError && (
+            <p className="mt-2 text-xs text-red-500">Audio error: {audioError}</p>
           )}
         </div>
       )}

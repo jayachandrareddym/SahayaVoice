@@ -2,23 +2,32 @@
 # Install: pip install -r requirements.txt
 
 # Web framework & server
-fastapi==0.111.0
-uvicorn[standard]==0.29.0
-python-multipart==0.0.9        # for audio file uploads
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9        # for audio file uploads
 
 # AI / LLM
-openai==1.30.1                 # Whisper STT + fallback LLM (GPT-4o)
-ibm-watsonx-ai==1.0.6          # IBM Granite / watsonx.ai (M6)
-httpx==0.27.0                  # async HTTP client for Sarvam / Bhashini APIs
+openai>=1.30.1                 # Whisper STT + fallback LLM (GPT-4o)
+httpx>=0.27.0                  # async HTTP client for Sarvam / Bhashini APIs
+
+# pandas/numpy – binary only (no C compiler needed)
+pandas>=2.3.0 --only-binary=:all:
+numpy>=2.0.0 --only-binary=:all:
 
 # TTS
-edge-tts==6.1.9                # fallback TTS (M7)
+edge-tts>=6.1.9                # fallback TTS (M7)
 # elevenlabs                   # optional – uncomment if ElevenLabs is used (M7)
 
 # Document generation
-reportlab==4.2.0               # PDF generation (M7)
-fpdf2==2.7.9                   # alternative PDF lib (M7, choose one)
+reportlab>=4.2.0               # PDF generation (M7)
+fpdf2>=2.7.9                   # alternative PDF lib (M7, choose one)
 
 # Utilities
-python-dotenv==1.0.1           # load .env file
-pydantic==2.7.1                # data validation (used by FastAPI)
+python-dotenv>=1.0.1           # load .env file
+pydantic>=2.7.1                # data validation (used by FastAPI)
+
+# NOTE: ibm-watsonx-ai is installed separately (see install instructions below)
+# because ibm-cos-sdk has no Windows wheel.
+# Run after pip install -r requirements.txt:
+#   pip install ibm-watsonx-ai --no-deps
+#   pip install requests lomond tabulate packaging
