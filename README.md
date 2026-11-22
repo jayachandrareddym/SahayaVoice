@@ -39,3 +39,84 @@ We are building *SahayaVoice*, a real-time, multilingual, dialect-aware Voice AI
 ## 6. Instructions for IBM Bob
 Act as our lead full-stack and Voice AI architect. Help us scaffold the repository, write clean modular code for the audio recording -> STT -> LLM -> TTS pipeline, and ensure low-latency responses. Always prioritize reliability and quick hackathon-ready implementation over complex over-engineering.
 Use code with caution.
+
+---
+
+## 7. Repository Structure
+
+```
+sahayavoice/
+│
+├── backend/
+│   ├── main.py                   ← FastAPI app (M1 scaffold, M5 owns routes)
+│   ├── prompts.py                ← LLM system prompts (M1/M6)
+│   ├── pipeline/
+│   │   ├── stt.py                ← Speech-to-Text (M4)
+│   │   ├── llm_agent.py          ← AI agent & Kannada generation (M6)
+│   │   └── tts.py                ← Text-to-Speech (M7)
+│   └── requirements.txt
+│
+├── frontend/
+│   ├── package.json
+│   └── src/
+│       ├── app/page.tsx          ← Root page (M2)
+│       └── components/
+│           ├── VoiceRecorder.tsx ← Mic recording + waveform (M3)
+│           ├── KannadaDocCard.tsx← Letter display + PDF (M7)
+│           └── DemoPresets.tsx   ← One-click demo scenarios (M8)
+│
+├── tests/                        ← Test suite (M8)
+├── .env.example                  ← All required env keys (copy → .env)
+└── README.md
+```
+
+## 8. Quick Start
+
+### Backend
+```bash
+cd backend
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp ../.env.example ../.env   # then fill in your API keys
+uvicorn main:app --reload    # runs on http://localhost:8000
+```
+
+### Frontend
+```bash
+cd frontend
+npm install
+npm run dev                  # runs on http://localhost:3000
+```
+
+### Environment Variables
+Copy `.env.example` to `.env` and fill in:
+- `OPENAI_API_KEY` – for Whisper STT
+- `WATSONX_API_KEY` + `WATSONX_PROJECT_ID` – for IBM Granite LLM
+- `SARVAM_API_KEY` – for Sarvam saarika STT + bulbul TTS
+
+## 9. API Endpoints (Contract)
+
+| Method | Path                 | Owner | Description                              |
+|--------|----------------------|-------|------------------------------------------|
+| GET    | `/health`            | M1    | Service health check                     |
+| POST   | `/api/transcribe`    | M4/M5 | Audio file → transcript + language       |
+| POST   | `/api/process-voice` | M5/M6 | Transcript → intent + Kannada letter     |
+| POST   | `/api/speak`         | M5/M7 | Text → audio stream (TTS)                |
+| POST   | `/api/demo-preset`   | M5/M8 | Preset ID → pre-filled VoiceResult       |
+| POST   | `/api/download-pdf`  | M5/M7 | Kannada letter text → PDF download       |
+
+## 10. Branch Strategy
+Each member works on their own branch:
+
+| Branch            | Owner    | Module                        |
+|-------------------|----------|-------------------------------|
+| `task-1-vinay`    | M1       | Architecture & scaffold       |
+| `task-2-frontend` | M2       | Next.js UI                    |
+| `task-3-audio`    | M3       | Voice recording & waveform    |
+| `task-4-stt`      | M4       | Speech-to-Text                |
+| `task-5-backend`  | M5       | FastAPI routes & orchestration|
+| `task-6-llm`      | M6       | LLM agent & Kannada letter    |
+| `task-7-tts`      | M7       | TTS & PDF generation          |
+| `task-8-qa`       | M8       | Tests, demo presets, docs     |
+
+M1 is responsible for integration merges into `main`.
