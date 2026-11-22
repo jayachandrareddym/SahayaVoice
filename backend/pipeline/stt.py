@@ -1,141 +1,211 @@
 """
-SahayaVoice – Speech-to-Text (STT) pipeline module
-Owner: Member 4 (STT & Language Detection)
-
-- Accepts raw audio bytes (WAV / WebM / OGG)
-- Primary:  OpenAI Whisper (whisper-1) via API
-- Fallback: Sarvam AI saarika endpoint
-- Detects language: Kannada, Hindi, Tamil, Telugu, English, Kanglish/mixed
-- Returns clean transcript + detected language code + confidence
+Member 4 – Speech-to-Text & Language Detection
+Multilingual STT supporting Kannada, Hindi, Tamil, Telugu, English + Kanglish.
+Engines: Sarvam AI (primary for Indian languages) + OpenAI Whisper (fallback).
 """
 
-from __future__ import annotations
-
-import os
 import io
+import os
 import logging
-from typing import Literal
+from typing import Optional
 
 import httpx
-from openai import OpenAI
+import numpy as np
+import noisereduce as nr
+import torch
+import whisper
+from langdetect import DetectorFactory
+from pydub import AudioSegment
 
+DetectorFactory.seed = 0
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Type alias
+# Language mappings
 # ---------------------------------------------------------------------------
-LanguageCode = Literal["kn", "hi", "ta", "te", "en", "mixed"]
 
-# Whisper language names → ISO codes we use
-_WHISPER_LANG_MAP: dict[str, LanguageCode] = {
-    "kannada":  "kn",
-    "hindi":    "hi",
-    "tamil":    "ta",
-    "telugu":   "te",
-    "english":  "en",
+SUPPORTED_LANGUAGES: dict[str, str] = {
+    "kn": "Kannada",
+    "hi": "Hindi",
+    "ta": "Tamil",
+    "te": "Telugu",
+    "en": "English",
 }
 
-# Sarvam language codes
-_SARVAM_LANG_MAP: dict[str, LanguageCode] = {
-    "kn-IN": "kn",
-    "hi-IN": "hi",
-    "ta-IN": "ta",
-    "te-IN": "te",
-    "en-IN": "en",
+# Whisper uses full language names
+WHISPER_LANG_MAP: dict[str, str] = {
+    "kn": "kannada",
+    "hi": "hindi",
+    "ta": "tamil",
+    "te": "telugu",
+    "en": "english",
 }
 
+# Sarvam AI BCP-47 locale codes
+SARVAM_LANG_MAP: dict[str, str] = {
+    "kn": "kn-IN",
+    "hi": "hi-IN",
+    "ta": "ta-IN",
+    "te": "te-IN",
+    "en": "en-IN",
+}
 
-class TranscriptResult:
-    """Structured output from the STT pipeline."""
+# Reverse map: Whisper name → ISO 639-1
+_WHISPER_TO_ISO: dict[str, str] = {v: k for k, v in WHISPER_LANG_MAP.items()}
 
-    def __init__(self, transcript: str, language: LanguageCode, confidence: float):
-        self.transcript = transcript
-        self.language = language
-        self.confidence = confidence
 
-    def to_dict(self) -> dict:
+class MultilingualTranscriber:
+    """
+    Transcribe speech audio in Kannada, Hindi, Tamil, Telugu, English and Kanglish.
+
+    Usage::
+
+        t = MultilingualTranscriber()
+        result = t.transcribe(audio_bytes, hint_language="kn")
+        print(result["transcript"])
+    """
+
+    def __init__(
+        self,
+        whisper_model: str = "medium",
+        sarvam_api_key: Optional[str] = None,
+        use_sarvam: bool = True,
+    ) -> None:
+        self.sarvam_api_key = sarvam_api_key or os.getenv("SARVAM_API_KEY", "")
+        self.use_sarvam = use_sarvam and bool(self.sarvam_api_key)
+
+        logger.info("Loading Whisper model: %s", whisper_model)
+        self.model = whisper.load_model(whisper_model)
+        logger.info("Whisper model ready.")
+
+    # ------------------------------------------------------------------
+    # Public entry point
+    # ------------------------------------------------------------------
+
+    def transcribe(
+        self,
+        audio_bytes: bytes,
+        hint_language: Optional[str] = None,
+    ) -> dict:
+        """
+        Transcribe *audio_bytes* and return a result dict::
+
+            {
+                "transcript":     str,
+                "language_code":  str,   # ISO 639-1
+                "language_name":  str,
+                "engine":         str,   # "sarvam" | "whisper"
+                "is_kanglish":    bool,
+            }
+        """
+        audio_arr, sr = self._load_and_denoise(audio_bytes)
+        lang = hint_language or self._detect_language(audio_arr)
+
+        if lang not in SUPPORTED_LANGUAGES:
+            logger.warning("Unsupported language '%s', defaulting to 'en'.", lang)
+            lang = "en"
+
+        raw_text, engine = self._run_stt(audio_bytes, audio_arr, lang)
+        transcript = self._clean(raw_text)
+
         return {
-            "transcript": self.transcript,
-            "language": self.language,
-            "confidence": self.confidence,
+            "transcript": transcript,
+            "language_code": lang,
+            "language_name": SUPPORTED_LANGUAGES[lang],
+            "engine": engine,
+            "is_kanglish": self._is_kanglish(transcript, lang),
         }
 
+    # ------------------------------------------------------------------
+    # Audio preprocessing
+    # ------------------------------------------------------------------
 
-def _detect_language(whisper_lang: str | None) -> LanguageCode:
-    """Map Whisper's detected language name/code to our internal LanguageCode."""
-    if not whisper_lang:
-        return "en"
-    key = whisper_lang.lower()
-    # Try full name first, then 2-char ISO prefix
-    return _WHISPER_LANG_MAP.get(key) or _WHISPER_LANG_MAP.get(key[:2]) or "mixed"
+    def _load_and_denoise(self, audio_bytes: bytes) -> tuple[np.ndarray, int]:
+        """Decode audio → mono 16 kHz float32 array, then remove noise."""
+        seg = AudioSegment.from_file(io.BytesIO(audio_bytes))
+        seg = seg.set_channels(1).set_frame_rate(16_000)
+        samples = np.array(seg.get_array_of_samples(), dtype=np.float32) / 32_768.0
+        denoised = nr.reduce_noise(y=samples, sr=16_000, stationary=False)
+        return denoised, 16_000
 
+    # ------------------------------------------------------------------
+    # Language detection
+    # ------------------------------------------------------------------
 
-def _transcribe_whisper(audio_bytes: bytes, hint_language: str | None) -> TranscriptResult:
-    """Transcribe using OpenAI Whisper API."""
-    client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    audio_file = io.BytesIO(audio_bytes)
-    audio_file.name = "audio.webm"
+    def _detect_language(self, audio_arr: np.ndarray) -> str:
+        """Use Whisper's built-in language detector on the first 30 s."""
+        try:
+            clip = whisper.pad_or_trim(torch.from_numpy(audio_arr).float())
+            mel = whisper.log_mel_spectrogram(clip).to(self.model.device)
+            _, probs = self.model.detect_language(mel)
+            best: str = max(probs, key=probs.get)  # type: ignore[arg-type]
+            logger.info("Detected language: %s (p=%.2f)", best, probs.get(best, 0))
+            return _WHISPER_TO_ISO.get(best, best[:2] if len(best) >= 2 else "en")
+        except Exception as exc:
+            logger.warning("Language detection failed (%s); defaulting to 'en'.", exc)
+            return "en"
 
-    kwargs: dict = {"model": "whisper-1", "file": audio_file, "response_format": "verbose_json"}
-    if hint_language:
-        # Map our code to a Whisper-accepted ISO 639-1 code
-        kwargs["language"] = hint_language if len(hint_language) == 2 else hint_language[:2]
+    # ------------------------------------------------------------------
+    # STT routing
+    # ------------------------------------------------------------------
 
-    response = client.audio.transcriptions.create(**kwargs)
-    detected = _detect_language(getattr(response, "language", None))
-    return TranscriptResult(
-        transcript=response.text.strip(),
-        language=detected,
-        confidence=0.95,  # Whisper doesn't expose a per-segment confidence in the simple API
-    )
+    def _run_stt(
+        self,
+        audio_bytes: bytes,
+        audio_arr: np.ndarray,
+        lang: str,
+    ) -> tuple[str, str]:
+        """Route to Sarvam AI for Indian languages; fall back to Whisper."""
+        if self.use_sarvam and lang != "en":
+            try:
+                return self._sarvam_stt(audio_bytes, lang), "sarvam"
+            except Exception as exc:
+                logger.warning("Sarvam STT error (%s); falling back to Whisper.", exc)
+        return self._whisper_stt(audio_arr, lang), "whisper"
 
-
-def _transcribe_sarvam(audio_bytes: bytes, hint_language: str | None) -> TranscriptResult:
-    """Transcribe using Sarvam AI saarika endpoint (fallback)."""
-    api_key = os.environ.get("SARVAM_API_KEY", "")
-    # Sarvam expects language_code like "kn-IN"
-    lang_code = f"{hint_language}-IN" if hint_language else "kn-IN"
-
-    with httpx.Client(timeout=30) as client:
-        response = client.post(
+    def _sarvam_stt(self, audio_bytes: bytes, lang: str) -> str:
+        resp = httpx.post(
             "https://api.sarvam.ai/speech-to-text",
-            headers={"api-subscription-key": api_key},
-            files={"file": ("audio.webm", audio_bytes, "audio/webm")},
-            data={"language_code": lang_code, "model": "saarika:v1"},
+            headers={"api-subscription-key": self.sarvam_api_key},
+            files={"file": ("audio.wav", audio_bytes, "audio/wav")},
+            data={
+                "language_code": SARVAM_LANG_MAP[lang],
+                "model": "saarika:v2",
+                "with_timestamps": "false",
+            },
+            timeout=30,
         )
-        response.raise_for_status()
-        data = response.json()
+        resp.raise_for_status()
+        return resp.json().get("transcript", "")
 
-    detected_raw = data.get("language_code", lang_code)
-    detected = _SARVAM_LANG_MAP.get(detected_raw, "mixed")
-    return TranscriptResult(
-        transcript=data.get("transcript", "").strip(),
-        language=detected,
-        confidence=data.get("confidence", 0.85),
-    )
+    def _whisper_stt(self, audio_arr: np.ndarray, lang: str) -> str:
+        result = self.model.transcribe(
+            audio_arr,
+            language=WHISPER_LANG_MAP.get(lang, "english"),
+            task="transcribe",
+            fp16=torch.cuda.is_available(),
+            condition_on_previous_text=False,
+            temperature=0.0,
+        )
+        return result["text"]  # type: ignore[index]
 
+    # ------------------------------------------------------------------
+    # Post-processing helpers
+    # ------------------------------------------------------------------
 
-def transcribe_audio(audio_bytes: bytes, hint_language: str | None = None) -> TranscriptResult:
-    """
-    Transcribe raw audio and detect language.
+    @staticmethod
+    def _clean(text: str) -> str:
+        """Strip Whisper filler tokens and normalise whitespace."""
+        for filler in ("[BLANK_AUDIO]", "(inaudible)", "[noise]", "[music]"):
+            text = text.replace(filler, "")
+        return " ".join(text.split())
 
-    Tries OpenAI Whisper first; falls back to Sarvam AI if OPENAI_API_KEY is absent.
-
-    Args:
-        audio_bytes:    Raw audio file bytes (WAV / WebM / OGG).
-        hint_language:  Optional ISO language code hint from the UI language selector.
-
-    Returns:
-        TranscriptResult with transcript, detected language, and confidence.
-    """
-    if os.environ.get("OPENAI_API_KEY"):
-        logger.info("STT: using OpenAI Whisper")
-        return _transcribe_whisper(audio_bytes, hint_language)
-
-    if os.environ.get("SARVAM_API_KEY"):
-        logger.info("STT: using Sarvam AI saarika (Whisper key not set)")
-        return _transcribe_sarvam(audio_bytes, hint_language)
-
-    raise EnvironmentError(
-        "No STT provider configured. Set OPENAI_API_KEY or SARVAM_API_KEY in .env"
-    )
+    @staticmethod
+    def _is_kanglish(text: str, lang: str) -> bool:
+        """True when Kannada script words appear alongside Latin words (>20 %)."""
+        if lang != "kn":
+            return False
+        has_kannada = any("\u0C80" <= ch <= "\u0CFF" for ch in text)
+        words = text.split()
+        latin_ratio = sum(1 for w in words if w.isascii() and w.isalpha()) / max(len(words), 1)
+        return has_kannada and latin_ratio > 0.20
