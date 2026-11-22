@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from typing import Callable, Awaitable
 
-from ..config import get_settings
+from .config import get_settings
 from .schema import ClarificationState, ExtractedIntent, MissingField
 from .detector import detect_missing, is_complete
 from .intent import merge_intent

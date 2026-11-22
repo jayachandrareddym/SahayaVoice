@@ -14,19 +14,19 @@ import json
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from backend.app.sahaya.schema import (
+from pipeline.sahaya.schema import (
     ComplaintCategory,
     ExtractedIntent,
     ClarificationState,
     MissingField,
     REQUIRED_FIELDS,
 )
-from backend.app.sahaya.detector import detect_missing, is_complete
-from backend.app.sahaya.clarifier import (
+from pipeline.sahaya.detector import detect_missing, is_complete
+from pipeline.sahaya.clarifier import (
     build_clarification_question,
     initial_state,
 )
-from backend.app.sahaya.agent import SahayaSession
+from pipeline.sahaya.agent import SahayaSession
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -196,13 +196,13 @@ def _make_mock_complete(responses: list[str]):
 class TestAgentIntegration:
     async def test_process_full_text_returns_complete(self):
         """Single-shot: full complaint → returns complete SahayaResult with letter."""
-        from backend.app.sahaya.agent import process_full_text
+        from pipeline.sahaya.agent import process_full_text
 
         with patch(
-            "backend.app.sahaya.intent.complete",
+            "pipeline.sahaya.intent.complete",
             new=_make_mock_complete([_INTENT_JSON]),
         ), patch(
-            "backend.app.sahaya.letter.complete",
+            "pipeline.sahaya.letter.complete",
             new=_make_mock_complete([_SUBJECT, _KANNADA_LETTER, _SUMMARY]),
         ):
             result = await process_full_text(
@@ -218,7 +218,7 @@ class TestAgentIntegration:
 
     async def test_process_full_text_empty_input(self):
         """Empty text must return failed status without calling the LLM."""
-        from backend.app.sahaya.agent import process_full_text
+        from pipeline.sahaya.agent import process_full_text
 
         result = await process_full_text("")
         assert result.status == "failed"
@@ -229,7 +229,7 @@ class TestAgentIntegration:
         Turn 1: partial complaint (no name/phone) → needs_clarification
         Turn 2: provides name and phone → complete
         """
-        from backend.app.sahaya.agent import process_utterance
+        from pipeline.sahaya.agent import process_utterance
 
         partial_intent_json = json.dumps({
             "category": "water_supply",
@@ -255,7 +255,7 @@ class TestAgentIntegration:
 
         # Turn 1
         with patch(
-            "backend.app.sahaya.intent.complete",
+            "pipeline.sahaya.intent.complete",
             new=_make_mock_complete([partial_intent_json]),
         ):
             r1 = await process_utterance("BTM Layout ನಲ್ಲಿ 3 ದಿನಗಳಿಂದ ನೀರು ಇಲ್ಲ", session)
@@ -265,10 +265,10 @@ class TestAgentIntegration:
 
         # Turn 2 — user provides name + phone
         with patch(
-            "backend.app.sahaya.intent.complete",
+            "pipeline.sahaya.intent.complete",
             new=_make_mock_complete([full_intent_json]),
         ), patch(
-            "backend.app.sahaya.letter.complete",
+            "pipeline.sahaya.letter.complete",
             new=_make_mock_complete([_SUBJECT, _KANNADA_LETTER, _SUMMARY]),
         ):
             r2 = await process_utterance("ನನ್ನ ಹೆಸರು ಮೀನಾ ದೇವಿ, ಮೊಬೈಲ್ 9000011111", session)
@@ -279,13 +279,13 @@ class TestAgentIntegration:
 
     async def test_sahaya_result_serializes_to_valid_json(self):
         """SahayaResult must serialize cleanly to JSON (no Enum issues, etc.)."""
-        from backend.app.sahaya.agent import process_full_text
+        from pipeline.sahaya.agent import process_full_text
 
         with patch(
-            "backend.app.sahaya.intent.complete",
+            "pipeline.sahaya.intent.complete",
             new=_make_mock_complete([_INTENT_JSON]),
         ), patch(
-            "backend.app.sahaya.letter.complete",
+            "pipeline.sahaya.letter.complete",
             new=_make_mock_complete([_SUBJECT, _KANNADA_LETTER, _SUMMARY]),
         ):
             result = await process_full_text("Road is broken at Vijayanagar")
