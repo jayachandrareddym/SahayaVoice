@@ -210,6 +210,7 @@ def _generate_pdf(kannada_letter: str, summary: str) -> bytes:
     # If a system Noto font is available, use it; else fall back to Helvetica (English only).
     _FONT_NAME = "Helvetica"
     _noto_paths = [
+        str(pathlib.Path(__file__).parent / "fonts" / "NotoSansKannada-Regular.ttf"),
         "/usr/share/fonts/truetype/noto/NotoSansKannada-Regular.ttf",
         "C:/Windows/Fonts/NotoSansKannada-Regular.ttf",
     ]

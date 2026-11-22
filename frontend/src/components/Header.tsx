@@ -1,108 +1,127 @@
 "use client";
-import { useState, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { Mic, Zap, Menu, X } from "lucide-react";
 
-const NAV_LINKS = [
-  { label: "Home",         href: "#hero" },
-  { label: "How It Works", href: "#how-it-works" },
-  { label: "Features",     href: "#features" },
-  { label: "Demo",         href: "#demo" },
-];
+import { useEffect, useState } from "react";
+import { motion } from "framer-motion";
+import { History, Moon, Sun, Volume2, VolumeX } from "lucide-react";
+import { checkHealth } from "@/lib/api";
 
-export default function Header() {
-  const [scrolled,     setScrolled]     = useState(false);
-  const [mobileOpen,   setMobileOpen]   = useState(false);
+interface HeaderProps {
+  voiceReplies: boolean;
+  onToggleVoiceReplies: () => void;
+  historyCount: number;
+  onOpenHistory: () => void;
+}
+
+type Health = "checking" | "online" | "offline";
+
+function LogoMark() {
+  return (
+    <div className="relative grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-accent via-[rgb(var(--accent)/0.85)] to-violet shadow-glow">
+      <div className="flex h-4 items-center gap-[3px]">
+        {[0.5, 1, 0.7, 0.9].map((h, i) => (
+          <span
+            key={i}
+            className="block w-[3px] origin-center animate-eq rounded-full bg-accent-ink/90"
+            style={{ height: `${h * 100}%`, animationDelay: `${i * 0.15}s` }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export default function Header({ voiceReplies, onToggleVoiceReplies, historyCount, onOpenHistory }: HeaderProps) {
+  const [health, setHealth] = useState<Health>("checking");
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
 
   useEffect(() => {
-    const onScroll = () => setScrolled(window.scrollY > 20);
-    window.addEventListener("scroll", onScroll);
-    return () => window.removeEventListener("scroll", onScroll);
+    setTheme((document.documentElement.dataset.theme as "dark" | "light") ?? "dark");
+    const ctrl = new AbortController();
+    const ping = async () => setHealth((await checkHealth(ctrl.signal)) ? "online" : "offline");
+    ping();
+    const id = setInterval(ping, 15000);
+    return () => {
+      ctrl.abort();
+      clearInterval(id);
+    };
   }, []);
+
+  const toggleTheme = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    document.documentElement.dataset.theme = next;
+    try {
+      localStorage.setItem("sv-theme", next);
+    } catch {
+      /* storage blocked */
+    }
+  };
+
+  const dot = { checking: "bg-muted", online: "bg-success", offline: "bg-danger" }[health];
+  const label = { checking: "Connecting", online: "Live", offline: "Offline" }[health];
 
   return (
     <motion.header
-      initial={{ y: -80, opacity: 0 }}
-      animate={{ y: 0,   opacity: 1 }}
-      transition={{ duration: 0.5, ease: "easeOut" }}
-      className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${
-        scrolled ? "glass-dark shadow-glass py-3" : "bg-transparent py-5"
-      }`}
+      initial={{ opacity: 0, y: -16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
+      className="glass sticky top-3 z-40 mx-auto flex w-full max-w-5xl items-center justify-between rounded-2xl px-3 py-2.5 shadow-card sm:px-4"
     >
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 flex items-center justify-between">
-        {/* Logo */}
-        <a href="#hero" className="flex items-center gap-2 group">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-brand">
-            <Mic className="w-4 h-4 text-white" />
-          </div>
-          <span className="font-bold text-lg text-white group-hover:text-gradient transition-all">
-            SahayaVoice
+      <a href="#top" className="flex items-center gap-2.5">
+        <LogoMark />
+        <div className="leading-tight">
+          <p className="text-[15px] font-bold tracking-tight">SahayaVoice</p>
+          <p className="hidden text-[11px] text-muted sm:block">ಸಹಾಯ · Civic voice assistant</p>
+        </div>
+      </a>
+
+      <div className="flex items-center gap-1 sm:gap-1.5">
+        <div
+          className="mr-1 hidden items-center gap-2 rounded-full border hairline px-2.5 py-1 text-xs text-muted sm:flex"
+          title={health === "offline" ? "Backend not reachable — demo presets and voice will fail" : "Backend status"}
+        >
+          <span className="relative flex h-2 w-2">
+            {health === "online" && <span className={`absolute inset-0 animate-ping rounded-full ${dot} opacity-60`} />}
+            <span className={`relative h-2 w-2 rounded-full ${dot}`} />
           </span>
-        </a>
-
-        {/* Desktop nav */}
-        <nav className="hidden md:flex items-center gap-6">
-          {NAV_LINKS.map((link) => (
-            <a
-              key={link.href}
-              href={link.href}
-              className="text-sm text-slate-300 hover:text-white transition-colors font-medium"
-            >
-              {link.label}
-            </a>
-          ))}
-        </nav>
-
-        {/* CTA */}
-        <div className="hidden md:flex items-center gap-3">
-          <a
-            href="#voice-assistant"
-            className="btn-brand flex items-center gap-2 px-5 py-2 text-sm"
-          >
-            <Zap className="w-4 h-4" />
-            Start Speaking
-          </a>
+          {label}
         </div>
 
-        {/* Mobile menu toggle */}
         <button
-          className="md:hidden text-white p-2"
-          onClick={() => setMobileOpen(!mobileOpen)}
-          aria-label="Toggle menu"
+          onClick={onToggleVoiceReplies}
+          className="btn-ghost h-9 w-9 !p-0"
+          aria-pressed={voiceReplies}
+          aria-label={voiceReplies ? "Turn off spoken replies" : "Turn on spoken replies"}
+          title={voiceReplies ? "Spoken replies on" : "Spoken replies off"}
         >
-          {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+          {voiceReplies ? <Volume2 className="h-[18px] w-[18px]" /> : <VolumeX className="h-[18px] w-[18px] text-muted" />}
+        </button>
+
+        <button onClick={onOpenHistory} className="btn-ghost relative h-9 w-9 !p-0" aria-label="Open saved letters">
+          <History className="h-[18px] w-[18px]" />
+          {historyCount > 0 && (
+            <motion.span
+              key={historyCount}
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              className="absolute right-1 top-1 grid h-4 min-w-4 place-items-center rounded-full bg-accent px-1 text-[10px] font-bold text-accent-ink"
+            >
+              {historyCount}
+            </motion.span>
+          )}
+        </button>
+
+        <button onClick={toggleTheme} className="btn-ghost h-9 w-9 overflow-hidden !p-0" aria-label="Toggle colour theme">
+          <motion.span
+            key={theme}
+            initial={{ y: 18, rotate: -90, opacity: 0 }}
+            animate={{ y: 0, rotate: 0, opacity: 1 }}
+            transition={{ type: "spring", stiffness: 300, damping: 20 }}
+          >
+            {theme === "dark" ? <Moon className="h-[18px] w-[18px]" /> : <Sun className="h-[18px] w-[18px]" />}
+          </motion.span>
         </button>
       </div>
-
-      {/* Mobile nav */}
-      <AnimatePresence>
-        {mobileOpen && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            className="md:hidden glass-dark border-t border-white/10 px-4 pb-4"
-          >
-            {NAV_LINKS.map((link) => (
-              <a
-                key={link.href}
-                href={link.href}
-                onClick={() => setMobileOpen(false)}
-                className="block py-3 text-sm text-slate-300 hover:text-white border-b border-white/5 last:border-0"
-              >
-                {link.label}
-              </a>
-            ))}
-            <a
-              href="#voice-assistant"
-              onClick={() => setMobileOpen(false)}
-              className="btn-brand flex items-center justify-center gap-2 mt-4 px-5 py-2.5 text-sm w-full"
-            >
-              <Zap className="w-4 h-4" /> Start Speaking
-            </a>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </motion.header>
   );
 }
