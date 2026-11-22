@@ -10,15 +10,33 @@ import logging
 from typing import Optional
 
 import httpx
-import numpy as np
-import noisereduce as nr
-import torch
-import whisper
 from langdetect import DetectorFactory
-from pydub import AudioSegment
 
 DetectorFactory.seed = 0
 logger = logging.getLogger(__name__)
+
+# Heavy ML/audio deps – loaded lazily so server starts even without them.
+# Install:  pip install torch noisereduce openai-whisper numpy pydub pyaudioop
+try:
+    import numpy as np
+    import noisereduce as nr
+    import torch
+    import whisper as _whisper_lib
+    from pydub import AudioSegment as _AudioSegment
+    _ML_AVAILABLE = True
+except ImportError as _ml_err:
+    logger.warning(
+        "ML deps not installed (%s). STT will use Sarvam AI only. "
+        "Run: pip install torch noisereduce openai-whisper numpy",
+        _ml_err,
+    )
+    _ML_AVAILABLE = False
+    # Provide stubs so type-checker is happy
+    np = None             # type: ignore[assignment]
+    nr = None             # type: ignore[assignment]
+    torch = None          # type: ignore[assignment]
+    _whisper_lib = None   # type: ignore[assignment]
+    _AudioSegment = None  # type: ignore[assignment]
 
 # ---------------------------------------------------------------------------
 # Language mappings
@@ -74,9 +92,13 @@ class MultilingualTranscriber:
         self.sarvam_api_key = sarvam_api_key or os.getenv("SARVAM_API_KEY", "")
         self.use_sarvam = use_sarvam and bool(self.sarvam_api_key)
 
-        logger.info("Loading Whisper model: %s", whisper_model)
-        self.model = whisper.load_model(whisper_model)
-        logger.info("Whisper model ready.")
+        if _ML_AVAILABLE:
+            logger.info("Loading Whisper model: %s", whisper_model)
+            self.model = _whisper_lib.load_model(whisper_model)  # type: ignore[union-attr]
+            logger.info("Whisper model ready.")
+        else:
+            self.model = None
+            logger.warning("Whisper unavailable – install torch + openai-whisper for local STT.")
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -120,9 +142,11 @@ class MultilingualTranscriber:
     # Audio preprocessing
     # ------------------------------------------------------------------
 
-    def _load_and_denoise(self, audio_bytes: bytes) -> tuple[np.ndarray, int]:
+    def _load_and_denoise(self, audio_bytes: bytes):
         """Decode audio → mono 16 kHz float32 array, then remove noise."""
-        seg = AudioSegment.from_file(io.BytesIO(audio_bytes))
+        if not _ML_AVAILABLE:
+            raise RuntimeError("ML deps not installed – STT unavailable locally.")
+        seg = _AudioSegment.from_file(io.BytesIO(audio_bytes))
         seg = seg.set_channels(1).set_frame_rate(16_000)
         samples = np.array(seg.get_array_of_samples(), dtype=np.float32) / 32_768.0
         denoised = nr.reduce_noise(y=samples, sr=16_000, stationary=False)
@@ -132,11 +156,11 @@ class MultilingualTranscriber:
     # Language detection
     # ------------------------------------------------------------------
 
-    def _detect_language(self, audio_arr: np.ndarray) -> str:
+    def _detect_language(self, audio_arr) -> str:
         """Use Whisper's built-in language detector on the first 30 s."""
         try:
-            clip = whisper.pad_or_trim(torch.from_numpy(audio_arr).float())
-            mel = whisper.log_mel_spectrogram(clip).to(self.model.device)
+            clip = _whisper_lib.pad_or_trim(torch.from_numpy(audio_arr).float())  # type: ignore[union-attr]
+            mel = _whisper_lib.log_mel_spectrogram(clip).to(self.model.device)  # type: ignore[union-attr]
             _, probs = self.model.detect_language(mel)
             best: str = max(probs, key=probs.get)  # type: ignore[arg-type]
             logger.info("Detected language: %s (p=%.2f)", best, probs.get(best, 0))
@@ -178,7 +202,7 @@ class MultilingualTranscriber:
         resp.raise_for_status()
         return resp.json().get("transcript", "")
 
-    def _whisper_stt(self, audio_arr: np.ndarray, lang: str) -> str:
+    def _whisper_stt(self, audio_arr, lang: str) -> str:
         result = self.model.transcribe(
             audio_arr,
             language=WHISPER_LANG_MAP.get(lang, "english"),
