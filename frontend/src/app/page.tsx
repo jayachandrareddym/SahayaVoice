@@ -20,7 +20,7 @@ import DemoPresets from "@/components/DemoPresets";
 /** Languages supported by SahayaVoice */
 const SUPPORTED_LANGUAGES = [
   { code: "kn", label: "ಕನ್ನಡ" },
-  { code: "hi", label: "हिंदी" },
+  { code: "hi", label: "हिन्दी" },
   { code: "ta", label: "தமிழ்" },
   { code: "te", label: "తెలుగు" },
   { code: "en", label: "English" },
