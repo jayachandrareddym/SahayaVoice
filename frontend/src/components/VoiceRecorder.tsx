@@ -1,224 +1,388 @@
 "use client";
 
 /**
- * SahayaVoice – VoiceRecorder Component
+ * SahayaVoice – VoiceRecorder (voice orb)
  * Owner: Member 3 (Voice Recording & Audio Engineer)
  *
- * - Requests microphone permission
- * - Records audio via MediaRecorder (WebM/OGG)
- * - Renders a live waveform using AnalyserNode + canvas
- * - POSTs audio blob to /api/transcribe
- * - POSTs transcript to /api/process-voice
- * - Calls onResult() with the final VoiceResult
+ * - Requests microphone permission and records with MediaRecorder
+ *   (picks a mime type the browser supports, so Safari works too)
+ * - Renders a live radial frequency visualiser + level-reactive glow
+ * - Space toggles recording, Esc cancels; auto-stops after MAX_SECONDS
+ * - POSTs audio to /api/transcribe and hands the transcript to the page
  */
 
-import { useRef, useState, useEffect, useCallback } from "react";
-import { VoiceResult } from "@/app/page";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { Loader2, Mic, Square, X } from "lucide-react";
+import { transcribe } from "@/lib/api";
+import type { Stage } from "@/lib/types";
 
 interface VoiceRecorderProps {
   language: string;
-  onResult: (result: VoiceResult) => void;
-  onProcessingChange: (processing: boolean) => void;
+  stage: Stage;
+  busy: boolean;
+  onStageChange: (stage: Stage) => void;
+  onTranscript: (transcript: string, detectedLanguage?: string) => void;
+  onError: (message: string) => void;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const MAX_SECONDS = 60;
+const MIME_CANDIDATES = [
+  ["audio/webm;codecs=opus", "webm"],
+  ["audio/webm", "webm"],
+  ["audio/ogg;codecs=opus", "ogg"],
+  ["audio/mp4", "mp4"],
+] as const;
+
+function pickMime(): { mime: string; ext: string } {
+  if (typeof MediaRecorder === "undefined") return { mime: "", ext: "webm" };
+  for (const [mime, ext] of MIME_CANDIDATES) {
+    if (MediaRecorder.isTypeSupported(mime)) return { mime, ext };
+  }
+  return { mime: "", ext: "webm" };
+}
+
+const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
 export default function VoiceRecorder({
   language,
-  onResult,
-  onProcessingChange,
+  stage,
+  busy,
+  onStageChange,
+  onTranscript,
+  onError,
 }: VoiceRecorderProps) {
+  const reduceMotion = useReducedMotion();
   const [recording, setRecording] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [statusText, setStatusText] = useState("Tap to Speak");
+  const [elapsed, setElapsed] = useState(0);
+  const [level, setLevel] = useState(0);
 
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const animFrameRef = useRef<number>(0);
+  const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const frameRef = useRef(0);
+  const startedAtRef = useRef(0);
+  const cancelledRef = useRef(false);
+  const mimeRef = useRef(pickMime());
 
-  // ---------------------------------------------------------------------------
-  // Waveform animation
-  // ---------------------------------------------------------------------------
-  const drawWaveform = useCallback(() => {
+  // -------------------------------------------------------------------------
+  // Visualiser: radial bars around the orb + an RMS level for the glow
+  // -------------------------------------------------------------------------
+  const draw = useCallback(() => {
     const canvas = canvasRef.current;
     const analyser = analyserRef.current;
     if (!canvas || !analyser) return;
-
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const bufferLength = analyser.frequencyBinCount;
-    const dataArray = new Uint8Array(bufferLength);
+    const dpr = window.devicePixelRatio || 1;
+    const size = canvas.clientWidth;
+    canvas.width = size * dpr;
+    canvas.height = size * dpr;
+    ctx.scale(dpr, dpr);
 
-    const draw = () => {
-      animFrameRef.current = requestAnimationFrame(draw);
-      analyser.getByteTimeDomainData(dataArray);
+    const freq = new Uint8Array(analyser.frequencyBinCount);
+    const time = new Uint8Array(analyser.fftSize);
+    const styles = getComputedStyle(document.documentElement);
+    const accent = styles.getPropertyValue("--accent").trim().split(" ").join(",");
+    const violet = styles.getPropertyValue("--violet").trim().split(" ").join(",");
+    const BARS = 72;
+    const center = size / 2;
+    const inner = size * 0.33;
 
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = "#4f46e5"; // indigo-600
-      ctx.beginPath();
+    const loop = () => {
+      frameRef.current = requestAnimationFrame(loop);
+      analyser.getByteFrequencyData(freq);
+      analyser.getByteTimeDomainData(time);
 
-      const sliceWidth = canvas.width / bufferLength;
-      let x = 0;
-      for (let i = 0; i < bufferLength; i++) {
-        const v = dataArray[i] / 128.0;
-        const y = (v * canvas.height) / 2;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-        x += sliceWidth;
+      let sum = 0;
+      for (let i = 0; i < time.length; i++) {
+        const v = (time[i] - 128) / 128;
+        sum += v * v;
       }
-      ctx.lineTo(canvas.width, canvas.height / 2);
-      ctx.stroke();
-    };
+      setLevel(Math.min(1, Math.sqrt(sum / time.length) * 4));
+      setElapsed((performance.now() - startedAtRef.current) / 1000);
 
-    draw();
+      ctx.clearRect(0, 0, size, size);
+      for (let i = 0; i < BARS; i++) {
+        // Mirror the lower (voice-relevant) part of the spectrum around the circle
+        const idx = Math.floor(((i < BARS / 2 ? i : BARS - i) / (BARS / 2)) * (freq.length * 0.45));
+        const mag = freq[idx] / 255;
+        const len = 4 + mag * size * 0.14;
+        const angle = (i / BARS) * Math.PI * 2 - Math.PI / 2;
+        const x1 = center + Math.cos(angle) * inner;
+        const y1 = center + Math.sin(angle) * inner;
+        const x2 = center + Math.cos(angle) * (inner + len);
+        const y2 = center + Math.sin(angle) * (inner + len);
+        const grad = ctx.createLinearGradient(x1, y1, x2, y2);
+        grad.addColorStop(0, `rgba(${accent},0.95)`);
+        grad.addColorStop(1, `rgba(${violet},0.15)`);
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = 3;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+      }
+    };
+    loop();
   }, []);
 
-  const stopWaveform = () => {
-    cancelAnimationFrame(animFrameRef.current);
-    const canvas = canvasRef.current;
-    if (canvas) {
-      const ctx = canvas.getContext("2d");
-      ctx?.clearRect(0, 0, canvas.width, canvas.height);
-    }
-  };
+  const teardown = useCallback(() => {
+    cancelAnimationFrame(frameRef.current);
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    audioCtxRef.current?.close().catch(() => {});
+    audioCtxRef.current = null;
+    analyserRef.current = null;
+    const c = canvasRef.current;
+    c?.getContext("2d")?.clearRect(0, 0, c.width, c.height);
+    setLevel(0);
+  }, []);
 
-  // ---------------------------------------------------------------------------
-  // Start recording
-  // ---------------------------------------------------------------------------
-  const startRecording = async () => {
-    setError(null);
+  // -------------------------------------------------------------------------
+  // Recorded audio → STT → page
+  // -------------------------------------------------------------------------
+  const handleStop = useCallback(async () => {
+    if (cancelledRef.current) {
+      cancelledRef.current = false;
+      onStageChange("idle");
+      return;
+    }
+    const { mime, ext } = mimeRef.current;
+    const blob = new Blob(chunksRef.current, { type: mime || "audio/webm" });
+    if (blob.size < 1200) {
+      onStageChange("idle");
+      onError("That was too short — hold on a little longer and speak clearly.");
+      return;
+    }
+    onStageChange("transcribing");
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const { transcript, language: detected } = await transcribe(blob, `recording.${ext}`, language);
+      if (!transcript?.trim()) throw new Error("We couldn't hear any words. Please try again closer to the mic.");
+      onTranscript(transcript.trim(), detected);
+    } catch (err) {
+      onStageChange("error");
+      onError(err instanceof Error ? err.message : "Transcription failed");
+    }
+  }, [language, onError, onStageChange, onTranscript]);
+
+  const start = useCallback(async () => {
+    if (busy || recording) return;
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      onError("This browser can't record audio. Try Chrome, Edge or Safari — or type your request below.");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
       streamRef.current = stream;
 
-      // Set up Web Audio analyser for waveform
-      const audioCtx = new AudioContext();
-      const source = audioCtx.createMediaStreamSource(stream);
+      const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const audioCtx = new AC();
       const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 1024;
-      source.connect(analyser);
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.78;
+      audioCtx.createMediaStreamSource(stream).connect(analyser);
+      audioCtxRef.current = audioCtx;
       analyserRef.current = analyser;
-      drawWaveform();
 
-      // Set up MediaRecorder
-      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      const { mime } = mimeRef.current;
+      const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
       chunksRef.current = [];
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
-      recorder.onstop = handleRecordingStop;
-      recorder.start(100); // collect chunks every 100ms
-      mediaRecorderRef.current = recorder;
+      cancelledRef.current = false;
+      recorder.ondataavailable = (e) => e.data.size > 0 && chunksRef.current.push(e.data);
+      recorder.onstop = handleStop;
+      recorder.start(100);
+      recorderRef.current = recorder;
+
+      startedAtRef.current = performance.now();
+      setElapsed(0);
       setRecording(true);
-      setStatusText("Recording… Tap to Stop");
+      onStageChange("listening");
+      if ("vibrate" in navigator) navigator.vibrate?.(12);
+      requestAnimationFrame(draw);
     } catch (err) {
-      setError("Microphone access denied. Please allow microphone permission.");
-      console.error("Microphone error:", err);
+      teardown();
+      const denied = err instanceof DOMException && (err.name === "NotAllowedError" || err.name === "SecurityError");
+      onError(
+        denied
+          ? "Microphone access was blocked. Allow it from the address bar, or type your request instead."
+          : "Couldn't start the microphone. Check that one is connected.",
+      );
     }
-  };
+  }, [busy, recording, draw, handleStop, onError, onStageChange, teardown]);
 
-  // ---------------------------------------------------------------------------
-  // Stop recording
-  // ---------------------------------------------------------------------------
-  const stopRecording = () => {
-    mediaRecorderRef.current?.stop();
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    stopWaveform();
-    setRecording(false);
-    setStatusText("Processing…");
-  };
+  const stop = useCallback(
+    (cancel = false) => {
+      if (!recorderRef.current || recorderRef.current.state === "inactive") return;
+      cancelledRef.current = cancel;
+      recorderRef.current.stop();
+      teardown();
+      setRecording(false);
+      if ("vibrate" in navigator) navigator.vibrate?.(8);
+    },
+    [teardown],
+  );
 
-  // ---------------------------------------------------------------------------
-  // Handle recorded audio → STT → LLM
-  // ---------------------------------------------------------------------------
-  const handleRecordingStop = async () => {
-    onProcessingChange(true);
-    try {
-      const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-
-      // Step 1: Transcribe
-      const formData = new FormData();
-      formData.append("audio", blob, "recording.webm");
-      formData.append("language", language);
-
-      const sttRes = await fetch(`${API_URL}/api/transcribe`, {
-        method: "POST",
-        body: formData,
-      });
-      if (!sttRes.ok) throw new Error(`STT error: ${sttRes.status}`);
-      const { transcript, language: detectedLang } = await sttRes.json();
-
-      // Step 2: Process via LLM agent
-      const llmRes = await fetch(`${API_URL}/api/process-voice`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          transcript,
-          language: detectedLang ?? language,
-          session_id: crypto.randomUUID(),
-        }),
-      });
-      if (!llmRes.ok) throw new Error(`LLM error: ${llmRes.status}`);
-      const result: VoiceResult = await llmRes.json();
-      onResult(result);
-      setStatusText("Tap to Speak");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Unknown error";
-      setError(msg);
-      setStatusText("Tap to Speak");
-    } finally {
-      onProcessingChange(false);
-    }
-  };
-
-  // Cleanup on unmount
+  // Auto-stop at the time limit
   useEffect(() => {
-    return () => {
-      cancelAnimationFrame(animFrameRef.current);
-      streamRef.current?.getTracks().forEach((t) => t.stop());
+    if (recording && elapsed >= MAX_SECONDS) stop();
+  }, [recording, elapsed, stop]);
+
+  // Keyboard: Space toggles, Esc cancels (ignored while typing)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (t.closest("input, textarea, select, button, [contenteditable]")) return;
+      if (e.code === "Space") {
+        e.preventDefault();
+        recording ? stop() : start();
+      } else if (e.key === "Escape" && recording) {
+        stop(true);
+      }
     };
-  }, []);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [recording, start, stop]);
+
+  useEffect(() => () => teardown(), [teardown]);
+
+  const processing = stage === "transcribing" || stage === "understanding" || stage === "drafting";
+  const glow = 0.35 + level * 0.65;
+
+  const caption = recording
+    ? "Listening… tap to finish"
+    : processing
+      ? "Working on it…"
+      : "Tap to speak";
 
   return (
-    <section className="flex flex-col items-center gap-6 w-full max-w-sm">
-      {/* Pulse / recording button */}
-      <button
-        className={`
-          w-28 h-28 rounded-full text-white text-sm font-semibold
-          shadow-lg active:scale-95 transition-transform
-          ${recording
-            ? "bg-red-500 hover:bg-red-600 scale-105"
-            : "bg-indigo-600 hover:bg-indigo-700 animate-pulse"
-          }
-        `}
-        aria-label={recording ? "Stop recording" : "Tap to speak"}
-        onClick={recording ? stopRecording : startRecording}
-      >
-        {recording ? "🔴" : "🎙"}<br />
-        {recording ? "Stop" : "Tap to"}<br />
-        {recording ? "" : "Speak"}
-      </button>
+    <section className="relative flex flex-col items-center" aria-label="Voice input">
+      <div className="relative grid h-[300px] w-[300px] place-items-center sm:h-[340px] sm:w-[340px]">
+        {/* Visualiser canvas */}
+        <canvas
+          ref={canvasRef}
+          aria-hidden
+          className={`absolute inset-0 h-full w-full transition-opacity duration-500 ${recording ? "opacity-100" : "opacity-0"}`}
+        />
 
-      {/* Live waveform canvas */}
-      <canvas
-        ref={canvasRef}
-        width={320}
-        height={40}
-        className="w-full rounded bg-gray-100"
-        aria-hidden="true"
-      />
+        {/* Idle breathing rings */}
+        {!recording &&
+          !reduceMotion &&
+          [0, 1, 2].map((i) => (
+            <motion.span
+              key={i}
+              aria-hidden
+              className="absolute h-[168px] w-[168px] rounded-full border border-accent/30"
+              initial={{ scale: 1, opacity: 0 }}
+              animate={processing ? { rotate: 360, opacity: 0.5, scale: 1.08 + i * 0.12 } : { scale: [1, 1.75], opacity: [0.55, 0] }}
+              transition={
+                processing
+                  ? { rotate: { duration: 3 + i, repeat: Infinity, ease: "linear" }, scale: { duration: 0.6 } }
+                  : { duration: 3.2, repeat: Infinity, delay: i * 1.05, ease: "easeOut" }
+              }
+              style={processing ? { borderStyle: "dashed", borderColor: "rgb(var(--violet) / 0.45)" } : undefined}
+            />
+          ))}
 
-      {/* Status / error */}
-      {error ? (
-        <p className="text-xs text-red-500 text-center">{error}</p>
-      ) : (
-        <p className="text-xs text-gray-400 text-center">{statusText}</p>
-      )}
+        {/* Level-reactive glow */}
+        <motion.div
+          aria-hidden
+          className="absolute h-[190px] w-[190px] rounded-full blur-2xl"
+          animate={{ scale: recording ? 1 + level * 0.45 : processing ? 1.05 : 0.95, opacity: recording ? glow : 0.45 }}
+          transition={{ type: "spring", stiffness: 260, damping: 20 }}
+          style={{
+            background: recording
+              ? "radial-gradient(circle, rgb(var(--danger) / 0.7), rgb(var(--accent) / 0.25) 60%, transparent 70%)"
+              : "radial-gradient(circle, rgb(var(--accent) / 0.55), rgb(var(--violet) / 0.25) 60%, transparent 70%)",
+          }}
+        />
+
+        {/* The orb */}
+        <motion.button
+          type="button"
+          onClick={() => (recording ? stop() : start())}
+          disabled={busy && !recording}
+          aria-label={recording ? "Stop recording" : "Start recording"}
+          aria-pressed={recording}
+          whileHover={{ scale: 1.04 }}
+          whileTap={{ scale: 0.94 }}
+          animate={{ scale: recording ? 1 + level * 0.08 : 1 }}
+          transition={{ type: "spring", stiffness: 400, damping: 18 }}
+          className="relative z-10 grid h-[150px] w-[150px] place-items-center rounded-full text-accent-ink disabled:cursor-wait sm:h-[164px] sm:w-[164px]"
+          style={{
+            background: recording
+              ? "radial-gradient(circle at 30% 25%, rgb(255 255 255 / 0.35), transparent 45%), linear-gradient(140deg, rgb(var(--danger)), rgb(var(--accent)))"
+              : "radial-gradient(circle at 30% 25%, rgb(255 255 255 / 0.45), transparent 45%), linear-gradient(140deg, rgb(var(--accent)), rgb(var(--violet)))",
+            boxShadow:
+              "inset 0 -10px 30px rgb(0 0 0 / 0.25), inset 0 2px 0 rgb(255 255 255 / 0.35), 0 25px 60px -15px rgb(var(--accent) / 0.6)",
+          }}
+        >
+          {/* Conic sheen */}
+          <span
+            aria-hidden
+            className="absolute inset-[3px] animate-spin-slow rounded-full opacity-40 mix-blend-overlay"
+            style={{ background: "conic-gradient(from 0deg, transparent, white, transparent 30%)" }}
+          />
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.span
+              key={recording ? "rec" : processing ? "busy" : "idle"}
+              initial={{ scale: 0.4, opacity: 0, rotate: -30 }}
+              animate={{ scale: 1, opacity: 1, rotate: 0 }}
+              exit={{ scale: 0.4, opacity: 0, rotate: 30 }}
+              transition={{ type: "spring", stiffness: 500, damping: 26 }}
+              className="relative"
+            >
+              {recording ? (
+                <Square className="h-10 w-10 fill-current" />
+              ) : processing ? (
+                <Loader2 className="h-11 w-11 animate-spin" />
+              ) : (
+                <Mic className="h-12 w-12" strokeWidth={2.2} />
+              )}
+            </motion.span>
+          </AnimatePresence>
+        </motion.button>
+      </div>
+
+      {/* Caption, timer, cancel */}
+      <div className="-mt-4 flex h-14 flex-col items-center gap-1.5">
+        <AnimatePresence mode="wait">
+          <motion.p
+            key={caption}
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            className={`text-sm font-medium ${processing ? "shimmer-text" : "text-ink/80"}`}
+          >
+            {caption}
+          </motion.p>
+        </AnimatePresence>
+
+        {recording ? (
+          <div className="flex items-center gap-3 text-xs text-muted">
+            <span className="flex items-center gap-1.5 font-mono tabular-nums">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-danger" />
+              {fmt(elapsed)} / {fmt(MAX_SECONDS)}
+            </span>
+            <button onClick={() => stop(true)} className="flex items-center gap-1 rounded-full px-2 py-0.5 hover:bg-ink/[0.06] hover:text-ink">
+              <X className="h-3 w-3" /> Cancel
+            </button>
+          </div>
+        ) : (
+          !processing && (
+            <p className="hidden text-xs text-muted sm:block">
+              or press <kbd className="rounded-md border hairline bg-surface-2 px-1.5 py-0.5 font-mono text-[10px]">Space</kbd>
+            </p>
+          )
+        )}
+      </div>
     </section>
   );
 }
