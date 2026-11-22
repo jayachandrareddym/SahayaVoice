@@ -1,3 +1,123 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+@layer base {
+  :root {
+    --color-navy-950: #04071a;
+    --color-navy-900: #080d2e;
+    --color-brand-indigo: #6366f1;
+    --color-brand-violet: #7c3aed;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: #04071a;
+    color: #f1f5f9;
+    font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+@layer components {
+  /* Glassmorphism card */
+  .glass {
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .glass-dark {
+    background: rgba(13, 21, 69, 0.6);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+  }
+
+  /* Gradient text */
+  .text-gradient {
+    background: linear-gradient(135deg, #a5b4fc 0%, #c084fc 50%, #f0abfc 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .text-gradient-gold {
+    background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Brand button */
+  .btn-brand {
+    background: linear-gradient(135deg, #6366f1 0%, #7c3aed 100%);
+    color: white;
+    font-weight: 600;
+    border-radius: 9999px;
+    transition: all 0.2s ease;
+    box-shadow: 0 8px 24px rgba(99, 102, 241, 0.4);
+  }
+
+  .btn-brand:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 12px 32px rgba(99, 102, 241, 0.6);
+  }
+
+  .btn-ghost {
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.15);
+    color: white;
+    border-radius: 9999px;
+    transition: all 0.2s ease;
+  }
+
+  .btn-ghost:hover {
+    background: rgba(255,255,255,0.14);
+  }
+}
+
+/* Animated gradient mesh background */
+.bg-mesh {
+  background-color: #04071a;
+  background-image:
+    radial-gradient(at 40% 20%, hsla(240, 100%, 20%, 0.8) 0px, transparent 50%),
+    radial-gradient(at 80% 0%,  hsla(263, 100%, 25%, 0.6) 0px, transparent 50%),
+    radial-gradient(at 0%  50%, hsla(220, 100%, 15%, 0.8) 0px, transparent 50%),
+    radial-gradient(at 60% 80%, hsla(280,  80%, 20%, 0.5) 0px, transparent 50%);
+}
+
+/* Microphone orb rings */
+@keyframes ring-pulse {
+  0%   { transform: scale(1);   opacity: 0.6; }
+  100% { transform: scale(1.8); opacity: 0;   }
+}
+
+.orb-ring {
+  animation: ring-pulse 2s ease-out infinite;
+}
+.orb-ring:nth-child(2) { animation-delay: 0.6s; }
+.orb-ring:nth-child(3) { animation-delay: 1.2s; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #080d2e; }
+::-webkit-scrollbar-thumb { background: #3730a3; border-radius: 3px; }
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
